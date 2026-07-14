@@ -1,4 +1,6 @@
-## 方法 一：让 Agent 自动安装
+# Skill介绍：
+
+## 安装方法 一：让 Agent 自动安装
 
 适用于 Codex、Claude Code、Gemini CLI 等能够读写本地文件并执行终端命令的 Agent。普通网页聊天机器人没有本地权限，不能代装。
 
@@ -20,7 +22,7 @@ Agent 执行完后，重新打开你要使用的 Agent。Skill就安装完毕了
 
 下面的 **PowerShell** 步骤是给希望自己操作的人准备的。
 
-## 一、如何从 GitHub 下载并使用
+## 二、如何从 GitHub 下载并使用
 
 ### 1. 下载文件
 
