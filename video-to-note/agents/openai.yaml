@@ -1,0 +1,4 @@
+interface:
+  display_name: "视频转可操作笔记"
+  short_description: "将网络或本地视频转成带原片跳转和实操步骤的离线笔记"
+  default_prompt: "使用 $video-to-note 根据我提供的视频链接或本地文件制作可操作笔记。"

@@ -1,0 +1,9 @@
+note_request:
+  video_source: ""
+  video_type_and_content: ""
+  color_and_layout: "reference-warm"
+
+cookies_directory: "./cookies"
+
+# video_source 可填写 B站、抖音、YouTube 的单视频链接，或本地视频完整路径。
+# Cookie 分平台放入 cookies 目录；严禁把 Cookie 内容写入本文件或提交到 GitHub。
