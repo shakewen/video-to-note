@@ -1,8 +1,14 @@
-from typing import Any
+import os
 from pathlib import Path
+from typing import Any
 
 
 CookieSpec = str | dict[str, Any]
+
+
+def _tool_path(environment_name: str, fallback: str) -> str:
+    configured = os.environ.get(environment_name, "").strip()
+    return configured or fallback
 
 
 def build_cookie_args(cookies: CookieSpec) -> list[str]:
@@ -22,7 +28,7 @@ def build_cookie_args(cookies: CookieSpec) -> list[str]:
 
 def build_metadata_command(url: str, cookies: CookieSpec, metadata_dir: str) -> list[str]:
     return [
-        "yt-dlp",
+        _tool_path("VIDEO_NOTE_YT_DLP", "yt-dlp"),
         *build_cookie_args(cookies),
         "--no-playlist",
         "--dump-single-json",
@@ -38,7 +44,7 @@ def build_metadata_command(url: str, cookies: CookieSpec, metadata_dir: str) -> 
 
 def build_audio_command(url: str, cookies: CookieSpec, media_dir: str) -> list[str]:
     return [
-        "yt-dlp",
+        _tool_path("VIDEO_NOTE_YT_DLP", "yt-dlp"),
         *build_cookie_args(cookies),
         "--no-playlist",
         "-f",
@@ -58,7 +64,7 @@ def build_audio_command(url: str, cookies: CookieSpec, media_dir: str) -> list[s
 
 def build_video_command(url: str, cookies: CookieSpec, media_dir: str) -> list[str]:
     return [
-        "yt-dlp",
+        _tool_path("VIDEO_NOTE_YT_DLP", "yt-dlp"),
         *build_cookie_args(cookies),
         "--no-playlist",
         "-f",
@@ -75,7 +81,7 @@ def build_video_command(url: str, cookies: CookieSpec, media_dir: str) -> list[s
 
 def build_local_audio_command(source_path: str, output_mp3: str) -> list[str]:
     return [
-        "ffmpeg",
+        _tool_path("VIDEO_NOTE_FFMPEG", "ffmpeg"),
         "-y",
         "-i",
         source_path,
@@ -89,41 +95,61 @@ def build_local_audio_command(source_path: str, output_mp3: str) -> list[str]:
 
 
 def build_whisper_command(audio_path: str, language: str, transcript_dir: str) -> list[str]:
-    if language == "en":
-        model = "small.en"
+    model = "small.en" if language == "en" else "turbo"
+    normalized_language = "en" if language == "en" else "zh"
+    backend = os.environ.get(
+        "VIDEO_NOTE_TRANSCRIBE_BACKEND",
+        "openai-whisper",
+    ).strip().lower()
+    model_root = Path(
+        os.environ.get("VIDEO_NOTE_HOME", str(Path.home() / ".video-note-runtime"))
+    ) / "cache" / "whisper"
+
+    if backend in {"faster-whisper", "faster_whisper"}:
+        python = _tool_path("VIDEO_NOTE_PYTHON", "python")
+        adapter = Path(__file__).with_name("transcribe.py")
         return [
-            "whisper",
+            python,
+            str(adapter),
             audio_path,
+            "--backend",
+            "faster-whisper",
             "--model",
             model,
+            "--language",
+            normalized_language,
+            "--output-dir",
+            transcript_dir,
+            "--model-dir",
+            str(model_root),
+        ]
+
+    command = [
+        _tool_path("VIDEO_NOTE_WHISPER", "whisper"),
+        audio_path,
+        "--model",
+        model,
+    ]
+    if normalized_language != "en":
+        command.extend(["--language", normalized_language])
+    command.extend(
+        [
             "--task",
             "transcribe",
             "--output_format",
             "all",
             "--output_dir",
             transcript_dir,
+            "--model_dir",
+            str(model_root),
         ]
-
-    model = "turbo"
-    return [
-        "whisper",
-        audio_path,
-        "--model",
-        model,
-        "--language",
-        "zh",
-        "--task",
-        "transcribe",
-        "--output_format",
-        "all",
-        "--output_dir",
-        transcript_dir,
-    ]
+    )
+    return command
 
 
 def build_frame_command(video_path: str, timestamp: str, output_path: str) -> list[str]:
     return [
-        "ffmpeg",
+        _tool_path("VIDEO_NOTE_FFMPEG", "ffmpeg"),
         "-ss",
         timestamp,
         "-i",
@@ -138,7 +164,7 @@ def build_frame_command(video_path: str, timestamp: str, output_path: str) -> li
 
 def build_ffprobe_duration_command(media_path: str) -> list[str]:
     return [
-        "ffprobe",
+        _tool_path("VIDEO_NOTE_FFPROBE", "ffprobe"),
         "-v",
         "error",
         "-show_entries",
@@ -162,7 +188,7 @@ def build_chrome_screenshot_command(browser: str, html_path: str, output_png: st
 
 def build_crop_command(input_png: str, output_png: str, width: int, height: int, y: int) -> list[str]:
     return [
-        "ffmpeg",
+        _tool_path("VIDEO_NOTE_FFMPEG", "ffmpeg"),
         "-i",
         input_png,
         "-vf",

@@ -33,9 +33,27 @@ TEMPLATE_LABELS = {
     "matrix": "对比决策",
     "brief": "极简速报",
 }
+ADAPTIVE_ROLE_LABELS = {
+    "overview": "全局定位",
+    "method": "方法拆解",
+    "decision": "决策判断",
+    "process": "过程复原",
+    "case": "案例分析",
+    "warning": "限制提醒",
+    "conclusion": "结论收束",
+}
+AI_ADVICE_VERDICT_LABELS = {
+    "correct": "观点正确",
+    "partially_correct": "观点部分正确",
+    "incorrect": "观点错误",
+    "insufficient_evidence": "证据不足",
+}
 
 
 def render_actionable_html(title: str, metadata: dict[str, Any], payload: dict[str, Any]) -> str:
+    if payload.get("learning_design_version") in {"b-c-v1", "adaptive-blocks-v1"}:
+        return _render_learning_html(title, metadata, payload)
+
     chapters = payload.get("chapters", [])
     stages = payload.get("learning_path", [])
     source_url = str(metadata.get("source_url") or "")
@@ -71,6 +89,493 @@ def render_actionable_html(title: str, metadata: dict[str, Any], payload: dict[s
 .verification,.troubleshooting{{margin-top:13px}}.verification ul,.troubleshooting ul{{margin:6px 0;padding-left:20px}}.diagram{{margin:18px 0 0;padding:18px;background:#fff;border:1px solid var(--line);border-radius:6px}}.diagram svg{{display:block;width:100%;height:auto}}.frame{{margin:18px 0 0}}.frame img{{display:block;width:100%;max-height:420px;object-fit:contain;background:#111;border-radius:4px}}figcaption{{font-size:12px;color:var(--muted);margin-top:7px}}details{{margin-top:13px;border-top:1px solid var(--line);padding-top:9px}}summary{{cursor:pointer;font-weight:800;color:var(--accent)}}.sources{{padding:26px 0 34px}}.sources ul{{padding-left:20px}}
 @media(max-width:760px){{main{{width:100%;margin:0;padding:0 18px;border:0;border-radius:0}}.hero{{padding-top:24px}}h1{{font-size:26px}}.dashboard-stats,.summary-grid,.context-grid,.result-grid,.key-points,.toc-links,.visual-alignment{{grid-template-columns:1fr}}.toc-stage{{grid-template-columns:1fr;gap:8px}}.chapter-head{{display:block}}.unit-badge{{display:inline-block;margin-top:8px}}.feynman-card dl{{grid-template-columns:1fr}}}}
 </style></head><body data-theme="{escape(theme)}"><main><header class="hero"><div class="eyebrow">ACTIONABLE VIDEO NOTE</div><h1>{escape(title)}</h1><p>作者：{escape(str(metadata.get('uploader') or '未提供'))}</p><p class="topology">内容结构：{escape(topology_label)} · {escape(str(topology.get('reason') or ''))}</p></header>{dashboard}{toc}{cards}{action_items}<section class="sources"><h2>资料来源</h2><ul>{source_list or '<li>本笔记暂无外部资料</li>'}</ul></section></main></body></html>'''
+
+
+def _render_learning_html(
+    title: str,
+    metadata: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    """渲染旧版统一骨架或新版自适应内容块的完全离线长页。"""
+    chapters = [
+        chapter for chapter in payload.get("chapters", []) if isinstance(chapter, dict)
+    ]
+    source_url = str(metadata.get("source_url") or "")
+    stages = [
+        stage for stage in payload.get("learning_path", []) if isinstance(stage, dict)
+    ]
+    stage_by_chapter = {
+        chapter_id: (index, stage)
+        for index, stage in enumerate(stages, 1)
+        for chapter_id in stage.get("chapter_ids", [])
+    }
+    nav_items = "".join(
+        f'<a class="course-nav-link" href="#{escape(str(chapter.get("chapter_id", "")))}" '
+        f'data-chapter-link="{escape(str(chapter.get("chapter_id", "")))}">'
+        f'<span>{escape(str(chapter.get("chapter_index", ""))).zfill(2)}</span>'
+        f'<b>{escape(str(chapter.get("title", "")))}</b></a>'
+        for chapter in chapters
+    )
+    mobile_items = "".join(
+        f'<a class="mobile-course-link" href="#{escape(str(chapter.get("chapter_id", "")))}">'
+        f'{escape(str(chapter.get("chapter_index", "")))}. '
+        f'{escape(str(chapter.get("title", "")))}</a>'
+        for chapter in chapters
+    )
+    design_version = str(payload.get("learning_design_version") or "b-c-v1")
+    if design_version == "adaptive-blocks-v1":
+        ai_advice_enabled = payload.get("ai_advice_enabled")
+        cards = "".join(
+            _render_adaptive_chapter(
+                chapter,
+                source_url,
+                stage_by_chapter.get(chapter.get("chapter_id")),
+                ai_advice_enabled=ai_advice_enabled,
+            )
+            for chapter in chapters
+        )
+    else:
+        cards = "".join(
+            _render_learning_chapter(
+                chapter,
+                source_url,
+                stage_by_chapter.get(chapter.get("chapter_id")),
+            )
+            for chapter in chapters
+        )
+    outcomes = payload.get("ai_summary", {}).get("learning_outcomes", [])
+    outcome_items = "".join(
+        f"<li>{escape(str(item))}</li>" for item in outcomes if str(item).strip()
+    )
+    if not outcome_items:
+        outcome_items = (
+            "<li>看懂作者使用的具体案例</li>"
+            "<li>复原作者的方法与因果</li>"
+            "<li>把方法替换成自己的内容</li>"
+        )
+    author = escape(str(metadata.get("uploader") or "原视频作者"))
+    chapter_count = len(chapters)
+    hero_kicker = (
+        "按章节语义复原作者内容"
+        if design_version == "adaptive-blocks-v1"
+        else "从作者原例到直接应用"
+    )
+    footer_text = (
+        "本页不包含答题、评分或答案提交；每章只呈现原视频确实支持的内容块。"
+        if design_version == "adaptive-blocks-v1"
+        else "本页不包含答题、评分或答案提交；请直接复原作者原例并迁移到自己的内容。"
+    )
+    return f'''<!doctype html>
+<html lang="zh-CN" data-learning-design="{escape(design_version)}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:,">
+<title>{escape(title)}</title>
+<style>
+:root{{--canvas:#f3f0e8;--paper:#fffdf8;--white:#ffffff;--plane:#f7f4ed;--ink:#262626;--muted:#746f67;--line:#d5d0c7;--accent:#8b765b;--accent-ink:#6f5d48;--danger:#8a4943;--danger-plane:#fbf1ef;--caution:#7a633b;--caution-plane:#f8f2e5}}
+*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:var(--canvas);color:var(--ink);font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:16px;line-height:1.75;text-rendering:optimizeLegibility}}a{{color:var(--accent-ink);text-decoration-thickness:1px;text-underline-offset:3px}}button,summary,a{{-webkit-tap-highlight-color:transparent}}.reading-track{{position:fixed;z-index:20;inset:0 0 auto;height:2px;background:var(--line)}}#reading-progress{{width:100%;height:100%;background:var(--accent);transform:scaleX(0);transform-origin:left center;transition:transform .15s linear}}.course-shell{{display:grid;grid-template-columns:244px minmax(0,920px);gap:28px;max-width:1240px;margin:0 auto;padding:32px 24px 80px}}.course-sidebar{{position:sticky;top:28px;align-self:start;max-height:calc(100vh - 56px);overflow:auto;padding:22px 10px 22px 20px;border-left:1px solid var(--line)}}.brand-kicker{{font-size:11px;letter-spacing:.16em;font-weight:800;color:var(--accent-ink)}}.course-sidebar h2{{margin:9px 0 5px;font-family:"Songti SC","SimSun",serif;font-size:19px;line-height:1.45}}.course-sidebar>p{{margin:0 0 20px;color:var(--muted);font-size:12px}}.course-sidebar nav{{position:relative}}.course-sidebar nav::before{{content:"";position:absolute;top:18px;bottom:18px;left:8px;width:1px;background:var(--line)}}.course-nav-link{{position:relative;display:grid;grid-template-columns:32px 1fr;gap:6px;align-items:start;padding:9px 7px;color:var(--muted);text-decoration:none;font-size:13px}}.course-nav-link::before{{content:"";position:absolute;z-index:1;top:16px;left:5px;width:7px;height:7px;border:1px solid var(--accent);border-radius:50%;background:var(--canvas)}}.course-nav-link span{{font-variant-numeric:tabular-nums;color:var(--accent-ink);text-align:right}}.course-nav-link b{{font-weight:600}}.course-nav-link:hover,.course-nav-link[aria-current="true"]{{color:var(--ink)}}.course-nav-link[aria-current="true"]::before{{background:var(--accent)}}.course-main{{min-width:0;background:var(--paper);border:1px solid var(--line)}}.course-hero{{padding:52px 54px 44px;border-bottom:1px solid var(--line)}}.eyebrow{{font-size:12px;font-weight:900;letter-spacing:.12em;color:var(--accent-ink)}}.course-hero h1{{max-width:760px;margin:9px 0 13px;font-family:"Songti SC","SimSun",serif;font-size:clamp(32px,4vw,48px);font-weight:700;line-height:1.22;letter-spacing:-.02em}}.hero-meta{{color:var(--muted);font-size:13px}}.hero-summary{{max-width:760px;margin:28px 0 0;padding:18px 0 0;border-top:1px solid var(--line)}}.hero-summary b{{display:block;margin-bottom:9px;font-size:13px;color:var(--accent-ink)}}.hero-summary ul{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:0;padding:0;list-style:none}}.hero-summary li{{position:relative;padding-left:16px;font-size:13px;color:var(--muted)}}.hero-summary li::before{{content:"";position:absolute;top:.72em;left:0;width:6px;height:6px;border-radius:50%;background:var(--accent)}}.mobile-course-nav{{display:none;margin:0;border-bottom:1px solid var(--line);background:var(--plane)}}.mobile-course-nav summary{{padding:14px 20px;font-weight:800;color:var(--accent-ink);cursor:pointer}}.mobile-course-links{{display:grid;padding:0 20px 14px}}.mobile-course-link{{padding:8px 0;border-top:1px dotted var(--line);text-decoration:none;font-size:14px}}.learning-chapter{{scroll-margin-top:18px;margin:0;padding:48px 54px;border-bottom:1px solid var(--line);background:var(--paper)}}.chapter-heading{{display:flex;justify-content:space-between;gap:22px;padding-bottom:23px;border-bottom:1px solid var(--line)}}.chapter-index{{display:inline-flex;padding:3px 8px;border:1px solid var(--accent);border-radius:2px;color:var(--accent-ink);font-size:11px;font-weight:900}}.role-badge{{display:inline-flex;margin-left:8px;padding:3px 8px;border-left:1px solid var(--line);color:var(--muted);font-size:11px;font-weight:800}}.stage-label{{display:block;margin-top:11px;color:var(--muted);font-size:12px}}.chapter-heading h2{{max-width:680px;margin:6px 0 0;font-family:"Songti SC","SimSun",serif;font-size:clamp(25px,3vw,34px);line-height:1.35}}.source-jump{{align-self:start;white-space:nowrap;font-size:12px}}.learning-question{{margin:26px 0;padding:18px 20px;border-top:1px solid var(--accent);border-bottom:1px solid var(--accent);background:var(--plane)}}.learning-question small{{display:block;color:var(--accent-ink);font-weight:800}}.learning-question strong{{display:block;margin-top:3px;font-family:"Songti SC","SimSun",serif;font-size:20px;line-height:1.55}}.section-label{{display:block;margin-bottom:8px;color:var(--accent-ink);font-size:11px;font-weight:900;letter-spacing:.1em}}.author-case,.reconstruction,.reader-explanation,.takeaway,.direct-apply{{margin:20px 0;padding:20px 0;border-top:1px solid var(--line)}}.author-case h3,.reconstruction h3,.reader-explanation h3,.takeaway h3,.direct-apply h3{{margin:0 0 8px;font-size:19px}}.author-case blockquote{{margin:9px 0;font-family:"Songti SC","SimSun",serif;font-size:19px;font-weight:700;white-space:pre-wrap}}.case-meta{{margin:7px 0 0;color:var(--muted);font-size:12px}}.reconstruction-grid{{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:24px}}.reconstruction ol{{margin:5px 0;padding-left:22px}}.reconstruction li{{padding:4px 0}}.takeaway,.direct-apply{{padding:20px;background:var(--plane)}}.pattern{{margin:12px 0 0;padding:12px 14px;border:1px solid var(--line);background:var(--white);color:var(--accent-ink);font-weight:800}}.observation{{margin:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--plane)}}.observation summary{{padding:16px 20px;cursor:pointer;color:var(--accent-ink);font-weight:900}}.observation-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1px;padding:0 20px 20px}}.observation-grid>div{{padding:15px;background:var(--white)}}.observation-grid b{{display:block;margin-bottom:5px}}.observation-grid ul{{margin:0;padding-left:20px}}.evidence-drawer{{margin-top:24px;border-top:1px solid var(--line)}}.evidence-drawer summary{{padding:15px 0 4px;cursor:pointer;color:var(--accent-ink);font-weight:800}}.evidence-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:12px}}.evidence-frame{{margin:0;padding:10px;border:1px solid var(--line);background:var(--plane)}}.evidence-frame img{{display:block;width:100%;max-height:340px;object-fit:contain;border-radius:2px;background:#262626}}.evidence-frame figcaption{{margin-top:8px;color:var(--muted);font-size:12px}}.course-footer{{padding:30px 24px;text-align:center;color:var(--muted);font-size:12px}}:focus-visible{{outline:2px solid var(--accent-ink);outline-offset:3px}}
+.expression-sequence{{position:relative;margin:28px 0 22px;padding-left:32px}}.expression-sequence::before{{content:"";position:absolute;top:10px;bottom:14px;left:8px;width:1px;background:var(--line)}}.expression-step{{position:relative;margin:0 0 26px}}.expression-step:last-child{{margin-bottom:0}}.expression-step::before{{content:"";position:absolute;z-index:1;top:7px;left:-28px;width:9px;height:9px;border:1px solid var(--accent);border-radius:50%;background:var(--paper)}}.expression-step[data-step="author"]::before{{background:var(--accent)}}.author-statement,.plain-rewrite,.ai-advice{{margin:0;padding:0}}.author-statement blockquote{{margin:7px 0 0;font-family:"Songti SC","SimSun",serif;font-size:clamp(19px,2.2vw,23px);font-weight:700;line-height:1.75}}.plain-rewrite h3,.ai-advice h3{{margin:0;font-size:18px}}.plain-rewrite p,.ai-advice p{{margin:7px 0 0}}.ai-advice{{padding:18px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--plane)}}.ai-advice ol{{margin:10px 0 0;padding-left:23px}}.ai-advice li{{padding:4px 0}}.verdict-badge{{display:inline-flex;margin-left:8px;padding:2px 7px;border:1px solid var(--accent);border-radius:2px;color:var(--accent-ink);font-size:11px;font-weight:900}}.ai-advice[data-verdict="incorrect"]{{background:var(--danger-plane)}}.ai-advice[data-verdict="incorrect"] .verdict-badge{{border-color:var(--danger);color:var(--danger)}}.ai-advice[data-verdict="partially_correct"],.ai-advice[data-verdict="insufficient_evidence"]{{background:var(--caution-plane)}}.ai-advice[data-verdict="partially_correct"] .verdict-badge,.ai-advice[data-verdict="insufficient_evidence"] .verdict-badge{{border-color:var(--caution);color:var(--caution)}}.adaptive-summary{{margin:24px 0;padding:16px 0;border-top:1px dotted var(--line);border-bottom:1px dotted var(--line);font-family:"Songti SC","SimSun",serif;font-size:17px;font-weight:700}}.source-quotes{{margin:22px 0;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}}.source-quotes h3,.adaptive-block h3{{margin:0 0 8px;font-size:19px}}.source-quote-line{{margin:8px 0 0;font-family:"Songti SC","SimSun",serif;font-size:18px;font-weight:700;line-height:1.9}}.source-quote-item{{display:inline}}.source-quote-separator{{color:var(--accent);font-weight:400}}.adaptive-block{{margin:0;padding:24px 0;border-top:1px solid var(--line)}}.adaptive-block ul,.adaptive-block ol{{margin:7px 0 0;padding-left:23px}}.adaptive-block li{{padding:4px 0}}.block-takeaway,.block-application,.block-limitations{{margin:16px 0;padding:22px;background:var(--plane);border-top-color:var(--accent)}}.block-limitations{{background:var(--caution-plane)}}.block-summary{{margin-top:16px;padding:22px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);background:var(--white)}}.adaptive-comparison{{overflow-x:auto}}.adaptive-block table{{width:100%;border-collapse:collapse}}.adaptive-block th,.adaptive-block td{{padding:10px;border:1px solid var(--line);text-align:left;vertical-align:top}}.adaptive-block th{{background:var(--plane)}}.case-reconstruction-grid{{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:24px}}.adaptive-observation{{margin:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--plane)}}.adaptive-observation summary{{padding:16px 20px;cursor:pointer;color:var(--accent-ink);font-weight:900}}
+@media(max-width:920px){{.course-shell{{display:block;max-width:920px;padding:18px 14px 60px}}.course-sidebar{{display:none}}.mobile-course-nav{{display:block}}.course-hero{{padding:38px 34px}}.learning-chapter{{padding:38px 34px}}}}
+@media(max-width:620px){{body{{font-size:15px}}.course-shell{{padding:0}}.course-main{{border:0}}.course-hero{{padding:30px 20px}}.learning-chapter{{padding:32px 20px}}.hero-summary ul,.reconstruction-grid,.case-reconstruction-grid,.observation-grid,.evidence-grid{{grid-template-columns:1fr}}.hero-summary ul{{gap:9px}}.chapter-heading{{display:block}}.source-jump{{display:block;margin-top:12px}}.learning-question strong{{font-size:18px}}.expression-sequence{{padding-left:25px}}.expression-sequence::before{{left:6px}}.expression-step::before{{left:-23px}}.adaptive-block{{padding:21px 0}}.block-takeaway,.block-application,.block-limitations,.block-summary{{padding:18px}}.adaptive-comparison{{overflow:visible}}.adaptive-comparison table,.adaptive-comparison tbody,.adaptive-comparison tr,.adaptive-comparison th,.adaptive-comparison td{{display:block;width:100%}}.adaptive-comparison thead{{display:none}}.adaptive-comparison tr{{padding:10px 0;border-top:1px solid var(--line)}}.adaptive-comparison th,.adaptive-comparison td{{display:grid;grid-template-columns:70px minmax(0,1fr);gap:10px;padding:7px 0;border:0;border-bottom:1px dotted var(--line);background:transparent}}.adaptive-comparison th::before,.adaptive-comparison td::before{{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:700}}}}
+@media(prefers-reduced-motion:reduce){{html{{scroll-behavior:auto}}#reading-progress{{transition:none}}}}
+</style>
+</head>
+<body>
+<div class="reading-track" aria-hidden="true"><div id="reading-progress"></div></div>
+<div class="course-shell">
+<aside class="course-sidebar" aria-label="课程章节目录">
+<div class="brand-kicker">OFFLINE LEARNING NOTE</div>
+<h2>{escape(title)}</h2>
+<p>{chapter_count} 章 · 当前章节会自动高亮</p>
+<nav>{nav_items}</nav>
+</aside>
+<main class="course-main">
+<header class="course-hero">
+  <div class="eyebrow">{hero_kicker}</div>
+<h1>{escape(title)}</h1>
+<div class="hero-meta">作者：{author} · 共 {chapter_count} 章 · 完全离线阅读</div>
+<div class="hero-summary"><b>读完你将能够</b><ul>{outcome_items}</ul></div>
+</header>
+<details class="mobile-course-nav"><summary>展开 {chapter_count} 章目录</summary><nav class="mobile-course-links">{mobile_items}</nav></details>
+{cards}
+  <footer class="course-footer">{footer_text}</footer>
+</main>
+</div>
+<script>
+(() => {{
+  const progress = document.getElementById("reading-progress");
+  const chapters = [...document.querySelectorAll(".learning-chapter")];
+  const links = [...document.querySelectorAll(".course-nav-link")];
+  const updateProgress = () => {{
+    const max = document.documentElement.scrollHeight - innerHeight;
+    const ratio = max > 0 ? Math.min(1, scrollY / max) : 1;
+    progress.style.transform = `scaleX(${{ratio}})`;
+  }};
+  const observer = new IntersectionObserver((entries) => {{
+    const visible = entries.filter((entry) => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!visible) return;
+    links.forEach((link) => {{
+      const current = link.dataset.chapterLink === visible.target.id;
+      if (current) link.setAttribute("aria-current", "true");
+      else link.removeAttribute("aria-current");
+    }});
+  }}, {{rootMargin:"-20% 0px -65% 0px", threshold:[0,.2,.6]}});
+  chapters.forEach((chapter) => observer.observe(chapter));
+  addEventListener("scroll", updateProgress, {{passive:true}});
+  addEventListener("resize", updateProgress);
+  updateProgress();
+}})();
+</script>
+</body>
+</html>'''
+
+
+def _render_adaptive_chapter(
+    chapter: dict[str, Any],
+    source_url: str,
+    stage_info: tuple[int, dict[str, Any]] | None,
+    ai_advice_enabled: bool | None = None,
+) -> str:
+    chapter_id = escape(str(chapter.get("chapter_id", "")))
+    chapter_number = escape(str(chapter.get("chapter_index", "")))
+    timestamp = _chapter_timestamp(chapter)
+    stage_label = (
+        f'阶段 {stage_info[0]} · {stage_info[1].get("title", "")}'
+        if stage_info
+        else "独立章节"
+    )
+    role = str(chapter.get("chapter_role") or "")
+    role_label = escape(ADAPTIVE_ROLE_LABELS.get(role, role or "章节"))
+    if ai_advice_enabled is None:
+        expression = (
+            f'<p class="adaptive-summary">{escape(str(chapter.get("chapter_summary", "")))}</p>'
+            + _render_source_quotes(chapter.get("source_quotes"), source_url, timestamp)
+        )
+    else:
+        expression_steps = (
+            _render_expression_step(
+                "author",
+                _render_author_statement(chapter.get("author_statement")),
+            )
+            + _render_expression_step(
+                "rewrite",
+                _render_plain_rewrite(chapter.get("plain_rewrite")),
+            )
+            + _render_expression_step(
+                "advice",
+                _render_ai_advice(chapter.get("ai_advice"))
+                if ai_advice_enabled
+                else "",
+            )
+        )
+        expression = (
+            '<div class="expression-sequence" aria-label="作者观点理解流程">'
+            f"{expression_steps}</div>"
+            f'<p class="adaptive-summary">{escape(str(chapter.get("chapter_summary", "")))}</p>'
+        )
+    blocks = "".join(
+        _render_adaptive_block(block)
+        for block in chapter.get("content_blocks", [])
+        if isinstance(block, dict)
+    )
+    evidence = _render_learning_evidence(chapter.get("evidence"), source_url)
+    return f'''<article class="learning-chapter" id="{chapter_id}" data-chapter-role="{escape(role)}">
+<header class="chapter-heading">
+<div><span class="chapter-index">第 {chapter_number} 章</span><span class="role-badge">{role_label}</span><span class="stage-label">{escape(stage_label)}</span><h2>{escape(str(chapter.get("title", "")))}</h2></div>
+<span class="source-jump">{_video_link(source_url, timestamp, "回到原片 " + timestamp)}</span>
+</header>
+{expression}
+{blocks}
+{evidence}
+</article>'''
+
+
+def _render_expression_step(step: str, content: str) -> str:
+    if not content:
+        return ""
+    return (
+        f'<div class="expression-step" data-step="{escape(step)}">'
+        f"{content}</div>"
+    )
+
+
+def _render_author_statement(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return (
+        '<section class="author-statement">'
+        '<span class="section-label">作者原话</span>'
+        f"<blockquote>“{escape(text)}”</blockquote>"
+        "</section>"
+    )
+
+
+def _render_plain_rewrite(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return (
+        '<section class="plain-rewrite">'
+        '<span class="section-label">通俗改写</span>'
+        "<h3>换成大白话怎么理解</h3>"
+        f"<p>{escape(text)}</p>"
+        "</section>"
+    )
+
+
+def _render_ai_advice(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    verdict = str(value.get("verdict") or "")
+    label = AI_ADVICE_VERDICT_LABELS.get(verdict, "需要复核")
+    guidance = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in value.get("guidance", [])
+        if str(item).strip()
+    )
+    return (
+        f'<section class="ai-advice" data-verdict="{escape(verdict)}">'
+        '<span class="section-label">AI 建议</span>'
+        f'<h3>正确性判断<span class="verdict-badge">{escape(label)}</span></h3>'
+        f'<p>{escape(str(value.get("analysis") or ""))}</p>'
+        f"<ol>{guidance}</ol>"
+        "</section>"
+    )
+
+
+def _render_source_quotes(value: Any, source_url: str, fallback_timestamp: str) -> str:
+    if not isinstance(value, list) or not value:
+        return ""
+    quotes = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        quotes.append(
+            '<span class="source-quote-item">'
+            f'“{escape(str(item.get("text", "")))}”'
+            "</span>"
+        )
+    if not quotes:
+        return ""
+    return (
+        '<section class="source-quotes"><span class="section-label">作者原话</span>'
+        '<h3>先看作者实际说了什么</h3>'
+        '<blockquote class="source-quote-line">'
+        + '<span class="source-quote-separator">；</span>'.join(quotes)
+        + "。</blockquote>"
+        + "</section>"
+    )
+
+
+def _render_adaptive_block(block: dict[str, Any]) -> str:
+    block_type = str(block.get("type") or "")
+    title = escape(str(block.get("title") or ""))
+    label = {
+        "scope_facts": "事实范围",
+        "case_reconstruction": "案例复原",
+        "explanation": "理解说明",
+        "process": "过程步骤",
+        "comparison": "对比判断",
+        "limitations": "边界限制",
+        "takeaway": "方法提炼",
+        "application": "迁移应用",
+        "observation": "观察重点",
+        "summary": "本章结论",
+    }.get(block_type, "章节内容")
+
+    if block_type in {"scope_facts", "limitations"}:
+        items = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in block.get("items", [])
+            if str(item).strip()
+        )
+        content = f"<ul>{items}</ul>"
+    elif block_type in {"explanation", "summary", "application"}:
+        content = f'<p>{escape(str(block.get("text", "")))}</p>'
+    elif block_type == "takeaway":
+        pattern = str(block.get("pattern") or "").strip()
+        pattern_html = (
+            f'<div class="pattern">可复用结构：{escape(pattern)}</div>' if pattern else ""
+        )
+        content = f'<p>{escape(str(block.get("text", "")))}</p>{pattern_html}'
+    elif block_type == "case_reconstruction":
+        items = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in block.get("sequence", [])
+            if str(item).strip()
+        )
+        content = (
+            '<div class="case-reconstruction-grid"><div><b>案例情境</b>'
+            f'<p>{escape(str(block.get("context", "")))}</p><b>最后结果</b>'
+            f'<p>{escape(str(block.get("result", "")))}</p></div>'
+            f'<div><b>过程顺序</b><ol>{items}</ol></div></div>'
+        )
+    elif block_type == "process":
+        items = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in block.get("steps", [])
+            if str(item).strip()
+        )
+        content = f"<ol>{items}</ol>"
+    elif block_type == "comparison":
+        rows = []
+        for row in block.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            label_text = row.get("label") or row.get("option") or ""
+            detail = row.get("detail") or ""
+            avoid = row.get("avoid") or ""
+            recommend = row.get("recommend") or ""
+            rows.append(
+                "<tr>"
+                f'<th data-label="选项">{escape(str(label_text))}</th>'
+                f'<td data-label="说明">{escape(str(detail))}</td>'
+                f'<td data-label="避免">{escape(str(avoid))}</td>'
+                f'<td data-label="建议">{escape(str(recommend))}</td>'
+                "</tr>"
+            )
+        content = (
+            '<div class="adaptive-comparison"><table><thead><tr>'
+            "<th>选项</th><th>说明</th><th>避免</th><th>建议</th>"
+            f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        )
+    elif block_type == "observation":
+        common = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in block.get("common_focus", [])
+            if str(item).strip()
+        )
+        resolution = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in block.get("author_resolution", [])
+            if str(item).strip()
+        )
+        content = (
+            '<details class="adaptive-observation" open><summary>展开观察重点</summary>'
+            '<div class="observation-grid"><div><b>大多数人先注意</b>'
+            f"<ul>{common}</ul></div><div><b>作者真正处理</b>"
+            f"<ul>{resolution}</ul></div></div></details>"
+        )
+    else:
+        return ""
+
+    return (
+        f'<section class="adaptive-block block-{escape(block_type)}">'
+        f'<span class="section-label">{escape(label)}</span><h3>{title}</h3>'
+        f"{content}</section>"
+    )
+
+
+def _render_learning_chapter(
+    chapter: dict[str, Any],
+    source_url: str,
+    stage_info: tuple[int, dict[str, Any]] | None,
+) -> str:
+    chapter_id = escape(str(chapter.get("chapter_id", "")))
+    chapter_number = escape(str(chapter.get("chapter_index", "")))
+    timestamp = _chapter_timestamp(chapter)
+    stage_label = (
+        f'阶段 {stage_info[0]} · {stage_info[1].get("title", "")}'
+        if stage_info
+        else "独立章节"
+    )
+    reconstruction = chapter.get("case_reconstruction")
+    if not isinstance(reconstruction, dict):
+        reconstruction = {}
+    sequence = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in reconstruction.get("sequence", [])
+        if str(item).strip()
+    )
+    observation = _render_learning_observation(chapter.get("observation"))
+    author_examples = _render_learning_author_examples(chapter, source_url, timestamp)
+    evidence = _render_learning_evidence(chapter.get("evidence"), source_url)
+    return f'''<article class="learning-chapter" id="{chapter_id}">
+<header class="chapter-heading">
+<div><span class="chapter-index">第 {chapter_number} 章</span><span class="stage-label">{escape(stage_label)}</span><h2>{escape(str(chapter.get("title", "")))}</h2></div>
+<span class="source-jump">{_video_link(source_url, timestamp, "回到原片 " + timestamp)}</span>
+</header>
+<section class="learning-question"><small>本章要解决的问题</small><strong>{escape(str(chapter.get("learning_question", "")))}</strong></section>
+{author_examples}
+<section class="reconstruction"><span class="section-label">复原作者原例</span><h3>作者怎么做</h3><div class="reconstruction-grid"><div><b>案例情境</b><p>{escape(str(reconstruction.get("context", "")))}</p><b>最后结果</b><p>{escape(str(reconstruction.get("result", "")))}</p></div><div><b>过程顺序</b><ol>{sequence}</ol></div></div></section>
+<section class="reader-explanation"><span class="section-label">读懂因果</span><h3>为什么有效</h3><p>{escape(str(chapter.get("reader_explanation", "")))}</p></section>
+<section class="takeaway"><span class="section-label">方法提炼</span><h3>真正精髓</h3><p>{escape(str(chapter.get("core_takeaway", "")))}</p><div class="pattern">可复用结构：{escape(str(chapter.get("reusable_pattern", "")))}</div></section>
+<section class="direct-apply"><span class="section-label">迁移应用</span><h3>直接套用</h3><p>{escape(str(chapter.get("direct_application", "")))}</p></section>
+{observation}
+{evidence}
+</article>'''
+
+
+def _render_learning_author_examples(
+    chapter: dict[str, Any],
+    source_url: str,
+    fallback_timestamp: str,
+) -> str:
+    blocks = []
+    for item in chapter.get("author_examples", []):
+        if not isinstance(item, dict):
+            continue
+        timestamp = str(item.get("timestamp") or fallback_timestamp)
+        blocks.append(
+            '<section class="author-case">'
+            '<span class="section-label">视频中的具体案例</span>'
+            f'<h3>{escape(str(item.get("label") or "作者原例"))}</h3>'
+            f'<blockquote>{escape(str(item.get("text", "")))}</blockquote>'
+            f'<p class="case-meta">{escape(str(item.get("completeness", "")))} · '
+            f'{_video_link(source_url, timestamp, "回看原例 " + timestamp)}</p>'
+            "</section>"
+        )
+    return "".join(blocks)
+
+
+def _render_learning_observation(value: Any) -> str:
+    if not isinstance(value, dict) or value.get("enabled") is not True:
+        return ""
+    common = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in value.get("common_focus", [])
+        if str(item).strip()
+    )
+    resolution = "".join(
+        f"<li>{escape(str(item))}</li>"
+        for item in value.get("author_resolution", [])
+        if str(item).strip()
+    )
+    return (
+        '<details class="observation" data-observation="static-reveal">'
+        "<summary>展开观察重点：表面上看见了什么，作者真正处理了什么</summary>"
+        '<div class="observation-grid"><div><b>大多数人先注意</b>'
+        f"<ul>{common}</ul></div><div><b>作者真正处理</b>"
+        f"<ul>{resolution}</ul></div></div></details>"
+    )
+
+
+def _render_learning_evidence(value: Any, source_url: str) -> str:
+    if not isinstance(value, list) or not value:
+        return ""
+    figures = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        timestamp = str(item.get("timestamp", ""))
+        proves = str(item.get("proves") or "视频关键画面")
+        figures.append(
+            '<figure class="evidence-frame">'
+            f'<img src="{escape(str(item.get("frame_src", "")))}" '
+            f'alt="{escape(proves)}" loading="lazy" decoding="async">'
+            f'<figcaption>{_video_link(source_url, timestamp, "视频时间戳 " + timestamp)}'
+            f" · {escape(proves)}</figcaption></figure>"
+        )
+    if not figures:
+        return ""
+    return (
+        '<details class="evidence-drawer"><summary>展开视频证据与关键截图</summary>'
+        f'<div class="evidence-grid">{"".join(figures)}</div></details>'
+    )
 
 
 def _render_ai_overview(summary: Any) -> str:
