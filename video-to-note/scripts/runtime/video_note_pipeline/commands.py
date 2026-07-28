@@ -62,6 +62,24 @@ def build_audio_command(url: str, cookies: CookieSpec, media_dir: str) -> list[s
     ]
 
 
+def build_video_downloader_command(
+    url: str,
+    output_dir: str,
+    downloader_script: str,
+    python_executable: str | None = None,
+) -> list[str]:
+    """调用 video-downloader 下载素材，但将转写统一交给本流水线。"""
+    return [
+        python_executable or _tool_path("VIDEO_NOTE_PYTHON", "python"),
+        downloader_script,
+        url,
+        "--output-dir",
+        output_dir,
+        "--asr",
+        "none",
+    ]
+
+
 def build_video_command(url: str, cookies: CookieSpec, media_dir: str) -> list[str]:
     return [
         _tool_path("VIDEO_NOTE_YT_DLP", "yt-dlp"),
@@ -97,10 +115,9 @@ def build_local_audio_command(source_path: str, output_mp3: str) -> list[str]:
 def build_whisper_command(audio_path: str, language: str, transcript_dir: str) -> list[str]:
     model = "small.en" if language == "en" else "turbo"
     normalized_language = "en" if language == "en" else "zh"
-    backend = os.environ.get(
-        "VIDEO_NOTE_TRANSCRIBE_BACKEND",
-        "openai-whisper",
-    ).strip().lower()
+    backend = os.environ.get("VIDEO_NOTE_TRANSCRIBE_BACKEND", "").strip().lower()
+    if not backend:
+        backend = "faster-whisper"
     model_root = Path(
         os.environ.get("VIDEO_NOTE_HOME", str(Path.home() / ".video-note-runtime"))
     ) / "cache" / "whisper"

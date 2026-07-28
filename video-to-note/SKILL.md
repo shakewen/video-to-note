@@ -29,7 +29,7 @@ description: 用于用户提供 B站、抖音、YouTube 链接或本地视频路
    ```
    未点源任务配置时，`<skill_root>/scripts/check_environment.ps1` 的缺失检查结果无效，禁止据此报告缺失或启动安装。没有任务配置或正确加载后仍返回 `missing_tools` 时，读取 `references/runtime-setup.md`。
 2. 运行 `<skill_root>/scripts/init_request.ps1 -Source <输入>`，自动识别来源并生成配置。
-3. 读取 `references/workflow.md`，完成采集或本地读取、时长校验、Whisper、质量门禁和证据包。
+3. 网络视频通过内置 `download-source` 命令调用全局 `video-downloader`；该调用必须传入 `--asr none`，只下载视频、发布文案和元数据。随后由本 Skill 的 `faster-whisper` 完成唯一一次带时间戳的转写。读取 `references/workflow.md`，完成采集或本地读取、时长校验、Whisper、质量门禁和证据包。
 4. 在重写 `chapters.actionable.json` 前完整读取 `references/learning-design.md` 和 `references/rewrite-contract.md`。
 5. 按话题、案例、操作目标和结论的语义边界切章，不按固定时长或固定章数机械切割。
 6. 新任务使用 `learning_design_version: "adaptive-blocks-v1"`：每章依次提供一句作者原话、通俗改写和按开关生成的 AI 建议；逐字 `source_quotes` 只用于证据回溯。没有完整案例或明确迁移步骤时省略对应内容块。
@@ -38,7 +38,7 @@ description: 用于用户提供 B站、抖音、YouTube 链接或本地视频路
 ## Token 限制
 
 - 下载、转写、候选切章、SVG、HTML、截图和校验全部交给本地脚本。
-- 原始字幕只进入一次结构化重写。
+- 带时间戳的转写文本只进入一次结构化重写。
 - 作者原话、通俗改写和 AI 建议在同一次结构化重写中生成，不为 AI 建议重复提交完整字幕。
 - AI 建议正确时保持简短，错误、不完整或证据不足时才展开；用户关闭后不生成该字段。
 - 不生成举一反三案例，只保留作者真实案例。

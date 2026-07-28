@@ -14,14 +14,11 @@ from .actionable import (
 )
 from .chapters import ChapterValidationError, load_chapters_json, validate_chapters
 from .commands import (
-    build_audio_command,
     build_chrome_screenshot_command,
     build_crop_command,
     build_ffprobe_duration_command,
     build_frame_command,
     build_local_audio_command,
-    build_metadata_command,
-    build_video_command,
     build_whisper_command,
     format_command,
 )
@@ -40,6 +37,7 @@ from .render_check import PNGValidationError, inspect_png, plan_crop_slices
 from .report import render_quality_report
 from .runbook import render_manual_steps
 from .source import SourceResolutionError, resolve_source, write_local_metadata
+from .source_import import download_source
 from .slices import plan_crop_command_report, write_slice_manifest
 from .translation import write_finalized_translation, write_translation_draft
 
@@ -140,15 +138,20 @@ def plan_commands(config: dict[str, Any]) -> str:
         audio_cmd = build_local_audio_command(url, str(paths.media / "audio.mp3"))
         frame_video_path = url
     else:
-        metadata_cmd = build_metadata_command(url, cookies, str(paths.metadata))
-        audio_cmd = build_audio_command(url, cookies, str(paths.media))
-        frame_video_path = str(paths.media / "video.mp4")
+        metadata_cmd = [
+            ".\\pipeline\\run_pipeline.ps1",
+            "download-source",
+            url,
+            str(paths.root),
+        ]
+        source_video_path = paths.media / "source_video"
+        audio_cmd = build_local_audio_command(str(source_video_path), str(paths.media / "audio.mp3"))
+        frame_video_path = str(source_video_path)
     metadata_audit_cmd = [
         ".\\pipeline\\run_pipeline.ps1",
         "audit-metadata",
         str(paths.metadata / "metadata.full.json"),
     ]
-    video_cmd = None if is_local else build_video_command(url, cookies, str(paths.media))
     ffprobe_cmd = build_ffprobe_duration_command(str(paths.media / "audio.mp3"))
     whisper_cmd = build_whisper_command(str(paths.media / "audio.mp3"), primary_language, str(paths.transcript))
     quality_transcript = paths.transcript / "<transcript>.json"
@@ -265,7 +268,7 @@ def plan_commands(config: dict[str, Any]) -> str:
     lines = [
         f"# Command Plan: {video_id}",
         "",
-        "## 1. Metadata",
+        "## 1. Source Download and Metadata",
         f"`{format_command(metadata_cmd)}`",
         "",
         "## 2. Metadata Completeness Audit",
@@ -275,7 +278,7 @@ def plan_commands(config: dict[str, Any]) -> str:
         f"`{format_command(audio_cmd)}`",
         "",
         "## 4. Video for Frame Extraction",
-        f"`{url}`（直接使用本地原文件，不重复复制）" if is_local else f"`{format_command(video_cmd or [])}`",
+        f"`{url}`（直接使用本地原文件，不重复复制）" if is_local else f"`{frame_video_path}`（由第 1 步生成）",
         "",
         "## 5. ffprobe Duration Check",
         f"`{format_command(ffprobe_cmd)}`",
@@ -632,6 +635,11 @@ def main(argv: list[str] | None = None) -> int:
     local_metadata_parser.add_argument("output_json")
     local_metadata_parser.add_argument("--source-id", required=True)
 
+    download_source_parser = subparsers.add_parser("download-source")
+    download_source_parser.add_argument("url")
+    download_source_parser.add_argument("output_root", type=Path)
+    download_source_parser.add_argument("--downloader-script", type=Path)
+
     plan_parser = subparsers.add_parser("plan-commands")
     plan_parser.add_argument("config")
 
@@ -762,6 +770,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except SourceResolutionError as error:
             print(f"Source error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "download-source":
+        try:
+            manifest = download_source(args.url, args.output_root, args.downloader_script)
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
+            return 0
+        except (FileNotFoundError, OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+            print(f"Source download error: {error}", file=sys.stderr)
             return 2
     if args.command == "plan-commands":
         try:

@@ -52,9 +52,9 @@ Cookie 不存在时不传给 yt-dlp。若平台提示登录、验证或访问受
 
 ### 网络视频
 
-1. 执行 Metadata 命令，把 stdout 用 UTF-8 无 BOM 写入 `metadata/metadata.full.json`，禁止用 Windows PowerShell 的 `>`。
-2. 下载结果固定为 `media/audio.mp3` 和 `media/video.mp4`。
-3. 强制使用 `--no-playlist`，防止误下载合集。
+1. 执行 `download-source`。它调用全局 `video-downloader`，且固定传入 `--asr none`；下载器只负责视频、发布文案和元数据，不执行转写。
+2. 命令将视频整理为 `media/source_video`，将规范化元数据写入 `metadata/metadata.full.json`，保留原始元数据为 `metadata/source_metadata.json`，并将发布文案写入 `metadata/post_caption.txt`。
+3. 使用 `media/source_video` 通过 ffmpeg 提取 `media/audio.mp3`；转写统一由下一节的 Whisper 步骤执行一次。
 
 ### 本地视频
 
