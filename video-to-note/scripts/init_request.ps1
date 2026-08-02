@@ -4,6 +4,7 @@
     [Parameter(Mandatory = $true)][string]$ContentDescription,
     [ValidateSet("zh", "en", "mixed")][string]$Language = "zh",
     [ValidateSet("reference-warm", "calm-blue", "clean-gray")][string]$Theme = "reference-warm",
+    [ValidateSet("source-faithful")][string]$NoteMode = "source-faithful",
     [string]$CookiesDirectory = ".\cookies",
     [string]$Workspace = (Get-Location).Path
 )
@@ -61,6 +62,8 @@ language:
 frames:
   required_for_ui_or_operation_video: true
   video_type: "$VideoType"
+note:
+  mode: "$NoteMode"
 output:
   root_dir: "./outputs"
   preferred_name: ""

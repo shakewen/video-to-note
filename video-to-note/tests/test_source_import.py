@@ -11,12 +11,66 @@ RUNTIME_ROOT = Path(__file__).resolve().parents[1] / "scripts" / "runtime"
 sys.path.insert(0, str(RUNTIME_ROOT))
 
 from video_note_pipeline.source_import import import_downloader_result
+from video_note_pipeline.actionable import ActionableValidationError, prepare_actionable_skeleton
 from video_note_pipeline.commands import build_video_downloader_command, build_whisper_command
 from video_note_pipeline.cli import plan_commands
+from video_note_pipeline.config import ConfigError, validate_config
 from video_note_pipeline.transcribe import transcribe_with_faster_whisper, write_transcript_outputs
 
 
 class SourceImportTests(unittest.TestCase):
+    def test_source_faithful_mode_disables_ai_advice(self) -> None:
+        payload = prepare_actionable_skeleton(self._evidence_pack(), note_mode="source-faithful")
+
+        self.assertEqual(payload["note_mode"], "source-faithful")
+        self.assertFalse(payload["ai_advice_enabled"])
+
+    def test_ai_expanded_mode_is_not_available_yet(self) -> None:
+        with self.assertRaises(ActionableValidationError):
+            prepare_actionable_skeleton(self._evidence_pack(), note_mode="ai-expanded")
+
+        with self.assertRaises(ConfigError):
+            validate_config(self._config_with_mode("ai-expanded"))
+
+    def test_unknown_note_mode_is_rejected(self) -> None:
+        with self.assertRaises(ActionableValidationError):
+            prepare_actionable_skeleton(self._evidence_pack(), note_mode="unsupported")
+
+        with self.assertRaises(ConfigError):
+            validate_config(self._config_with_mode("unsupported"))
+
+    def test_plan_passes_note_mode_to_actionable_preparation(self) -> None:
+        plan = plan_commands(self._config_with_mode("source-faithful"))
+
+        self.assertIn("--note-mode source-faithful", plan)
+
+    @staticmethod
+    def _evidence_pack() -> dict[str, object]:
+        return {
+            "topology_candidate": {"type": "fragmented_knowledge", "reason": "测试"},
+            "chapters": [
+                {
+                    "chapter_index": 1,
+                    "title": "测试章节",
+                    "time_range": "00:00-00:01",
+                    "template_type": "concept",
+                    "body": ["测试内容"],
+                    "visual_anchor": "00:00 测试画面",
+                }
+            ],
+        }
+
+    @staticmethod
+    def _config_with_mode(mode: str) -> dict[str, object]:
+        return {
+            "video": {"url": "https://example.invalid/video", "expected_id": "demo"},
+            "cookies": {"mode": "none"},
+            "language": {"primary": "zh"},
+            "frames": {"video_type": "lecture"},
+            "note": {"mode": mode},
+            "output": {"root_dir": "C:/output"},
+        }
+
     def test_transcript_outputs_include_complete_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -73,6 +127,17 @@ class SourceImportTests(unittest.TestCase):
         self.assertIn("video-downloader", skill)
         self.assertIn("--asr none", skill)
         self.assertNotIn("平台字幕", skill)
+
+    def test_skill_documents_source_faithful_boundary(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        contract = (root / "references" / "rewrite-contract.md").read_text(encoding="utf-8")
+
+        self.assertIn("source-faithful", skill)
+        self.assertIn("不扩展、不纠错、不补充", skill)
+        self.assertIn("source-faithful", contract)
+        self.assertNotIn("ai-expanded", skill)
+        self.assertNotIn("ai-expanded", contract)
 
     def test_plan_uses_downloader_then_single_whisper_transcript(self) -> None:
         plan = plan_commands(

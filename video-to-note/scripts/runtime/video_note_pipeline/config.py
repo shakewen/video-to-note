@@ -9,6 +9,7 @@ class ConfigError(ValueError):
 VALID_LANGUAGES = {"zh", "en", "mixed"}
 VALID_COOKIE_MODES = {"file", "optional_file", "browser", "none"}
 VALID_VIDEO_TYPES = {"ui_demo", "lecture", "interview", "mixed"}
+VALID_NOTE_MODES = {"source-faithful"}
 
 
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -19,6 +20,9 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     language = _require_section(normalized, "language")
     frames = _require_section(normalized, "frames")
     output = _require_section(normalized, "output")
+    note = normalized.setdefault("note", {"mode": "source-faithful"})
+    if not isinstance(note, dict):
+        raise ConfigError("note section 必须是对象")
 
     if not str(video.get("url", "")).strip():
         raise ConfigError("video.url is required")
@@ -43,6 +47,11 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
 
     if not str(output.get("root_dir", "")).strip():
         raise ConfigError("output.root_dir is required")
+
+    note_mode = note.get("mode", "source-faithful")
+    if note_mode not in VALID_NOTE_MODES:
+        raise ConfigError(f"note.mode must be one of {sorted(VALID_NOTE_MODES)}")
+    note["mode"] = note_mode
 
     return normalized
 
