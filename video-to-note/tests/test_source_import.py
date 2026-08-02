@@ -12,9 +12,31 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 from video_note_pipeline.source_import import import_downloader_result
 from video_note_pipeline.commands import build_video_downloader_command, build_whisper_command
 from video_note_pipeline.cli import plan_commands
+from video_note_pipeline.transcribe import write_transcript_outputs
 
 
 class SourceImportTests(unittest.TestCase):
+    def test_transcript_outputs_include_complete_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outputs = write_transcript_outputs(
+                root / "audio.mp3",
+                root / "transcript",
+                "zh",
+                [
+                    {"start": 1.2, "end": 3.4, "text": "第一段操作说明"},
+                    {"start": 5.0, "end": 6.0, "text": "第二段教学说明"},
+                ],
+            )
+
+            markdown = outputs["markdown"].read_text(encoding="utf-8")
+
+            self.assertIn("# 完整转写", markdown)
+            self.assertIn("未经 AI 改写", markdown)
+            self.assertIn("## 00:00:01.200 → 00:00:03.400", markdown)
+            self.assertIn("## 00:00:05.000 → 00:00:06.000", markdown)
+            self.assertLess(markdown.index("第一段操作说明"), markdown.index("第二段教学说明"))
+
     def test_whisper_defaults_to_faster_whisper_adapter(self) -> None:
         with patch.dict("os.environ", {"VIDEO_NOTE_TRANSCRIBE_BACKEND": ""}):
             command = build_whisper_command("C:/output/audio.mp3", "zh", "C:/output/transcript")
