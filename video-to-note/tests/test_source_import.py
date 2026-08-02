@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,7 +13,7 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 from video_note_pipeline.source_import import import_downloader_result
 from video_note_pipeline.commands import build_video_downloader_command, build_whisper_command
 from video_note_pipeline.cli import plan_commands
-from video_note_pipeline.transcribe import write_transcript_outputs
+from video_note_pipeline.transcribe import transcribe_with_faster_whisper, write_transcript_outputs
 
 
 class SourceImportTests(unittest.TestCase):
@@ -36,6 +37,26 @@ class SourceImportTests(unittest.TestCase):
             self.assertIn("## 00:00:01.200 → 00:00:03.400", markdown)
             self.assertIn("## 00:00:05.000 → 00:00:06.000", markdown)
             self.assertLess(markdown.index("第一段操作说明"), markdown.index("第二段教学说明"))
+
+    def test_faster_whisper_uses_cpu_int8_by_default(self) -> None:
+        class FakeWhisperModel:
+            kwargs = None
+
+            def __init__(self, *args, **kwargs) -> None:
+                FakeWhisperModel.kwargs = kwargs
+
+            def transcribe(self, *args, **kwargs):
+                return ([{"start": 0, "end": 1, "text": "测试"}], types.SimpleNamespace(language="zh"))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio_path = root / "audio.mp3"
+            audio_path.write_bytes(b"audio")
+            with patch.dict(sys.modules, {"faster_whisper": types.SimpleNamespace(WhisperModel=FakeWhisperModel)}):
+                transcribe_with_faster_whisper(audio_path, root / "transcript", "turbo", "zh", root / "models")
+
+        self.assertEqual(FakeWhisperModel.kwargs["device"], "cpu")
+        self.assertEqual(FakeWhisperModel.kwargs["compute_type"], "int8")
 
     def test_whisper_defaults_to_faster_whisper_adapter(self) -> None:
         with patch.dict("os.environ", {"VIDEO_NOTE_TRANSCRIBE_BACKEND": ""}):
@@ -131,6 +152,34 @@ class SourceImportTests(unittest.TestCase):
             self.assertEqual(metadata["duration"], 12.5)
             self.assertEqual(metadata["uploader"], "作者")
             self.assertTrue((root / "output" / "metadata" / "post_caption.txt").is_file())
+
+    def test_import_downloader_result_preserves_and_muxes_split_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "downloader"
+            source_dir.mkdir()
+            video_path = source_dir / "lesson.f30064.mp4"
+            video_path.write_bytes(b"video")
+            audio_path = source_dir / "lesson.f30280.m4a"
+            audio_path.write_bytes(b"audio")
+            metadata_path = source_dir / "metadata.json"
+            metadata_path.write_text("{}", encoding="utf-8")
+
+            with patch("video_note_pipeline.source_import._mux_video_and_audio") as mux:
+                manifest = import_downloader_result(
+                    {
+                        "platform": "bilibili",
+                        "id": "BV-test",
+                        "video_path": str(video_path),
+                        "metadata_path": str(metadata_path),
+                    },
+                    root / "output",
+                )
+
+            stable_audio = root / "output" / "media" / "source_audio"
+            self.assertEqual(manifest["audio_path"], str(stable_audio))
+            self.assertTrue(stable_audio.is_file())
+            mux.assert_called_once_with(root / "output" / "media" / "source_video", stable_audio)
 
 
 if __name__ == "__main__":

@@ -117,8 +117,8 @@ def transcribe_with_faster_whisper(
     model_dir.mkdir(parents=True, exist_ok=True)
     model = WhisperModel(
         model_name,
-        device="auto",
-        compute_type="default",
+        device="cpu",
+        compute_type="int8",
         download_root=str(model_dir),
     )
     segments, info = model.transcribe(
