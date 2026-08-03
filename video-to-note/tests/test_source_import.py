@@ -25,7 +25,7 @@ class SourceImportTests(unittest.TestCase):
         self.assertEqual(payload["note_mode"], "source-faithful")
         self.assertFalse(payload["ai_advice_enabled"])
 
-    def test_ai_expanded_mode_is_not_available_yet(self) -> None:
+    def test_ai_expanded_mode_remains_outside_the_main_pipeline(self) -> None:
         with self.assertRaises(ActionableValidationError):
             prepare_actionable_skeleton(self._evidence_pack(), note_mode="ai-expanded")
 
@@ -135,9 +135,16 @@ class SourceImportTests(unittest.TestCase):
 
         self.assertIn("source-faithful", skill)
         self.assertIn("不扩展、不纠错、不补充", skill)
+        self.assertIn("ai-expanded", skill)
+        self.assertIn("独立阶段", skill)
         self.assertIn("source-faithful", contract)
-        self.assertNotIn("ai-expanded", skill)
         self.assertNotIn("ai-expanded", contract)
+        expanded_contract = (root / "references" / "ai-expanded-contract.md").read_text(encoding="utf-8")
+        self.assertIn("冻结", expanded_contract)
+        self.assertIn("不输出时间戳", expanded_contract)
+        self.assertIn("待核查主张", expanded_contract)
+        self.assertIn("不再次读取完整", expanded_contract)
+        self.assertIn("Agent Reach", expanded_contract)
 
     def test_plan_uses_downloader_then_single_whisper_transcript(self) -> None:
         plan = plan_commands(

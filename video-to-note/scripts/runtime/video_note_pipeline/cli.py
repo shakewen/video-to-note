@@ -26,6 +26,13 @@ from .config import ConfigError, validate_config
 from .cognitive import prepare_cognitive_chapters
 from .delivery import render_delivery_report, verify_delivery
 from .draft import write_draft_chapters
+from .expanded import (
+    ExpandedValidationError,
+    load_expanded_payload,
+    prepare_expanded_skeleton,
+    validate_expanded_payload,
+    write_expanded_markdown,
+)
 from .evidence import build_evidence_pack
 from .frames import plan_candidate_frame_commands, plan_frame_commands
 from .html import render_html
@@ -545,6 +552,28 @@ def validate_actionable_note_report(path: Path, require_frames: bool = False) ->
     )
 
 
+def prepare_ai_expanded_note_file(source_path: Path, output_path: Path, instruction: str = "") -> None:
+    payload = prepare_expanded_skeleton(source_path, instruction)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def validate_ai_expanded_note_report(draft_path: Path, source_path: Path) -> str:
+    result = validate_expanded_payload(load_expanded_payload(draft_path), source_path)
+    return "\n".join(
+        [
+            "# AI Expanded Note Validation",
+            "",
+            f"- status: {result['status']}",
+            f"- unit_count: {result['unit_count']}",
+        ]
+    )
+
+
+def write_ai_expanded_markdown_file(draft_path: Path, source_path: Path, output_path: Path) -> None:
+    write_expanded_markdown(load_expanded_payload(draft_path), output_path, source_path)
+
+
 def draft_chapters_file(
     transcript_json_path: Path,
     output_path: Path,
@@ -688,6 +717,20 @@ def main(argv: list[str] | None = None) -> int:
     actionable_validate_parser = subparsers.add_parser("validate-actionable-note")
     actionable_validate_parser.add_argument("actionable_json")
     actionable_validate_parser.add_argument("--require-frames", action="store_true")
+
+    expanded_prepare_parser = subparsers.add_parser("prepare-ai-expanded-note")
+    expanded_prepare_parser.add_argument("source_markdown", type=Path)
+    expanded_prepare_parser.add_argument("output_json", type=Path)
+    expanded_prepare_parser.add_argument("--instruction", default="")
+
+    expanded_validate_parser = subparsers.add_parser("validate-ai-expanded-note")
+    expanded_validate_parser.add_argument("expanded_json", type=Path)
+    expanded_validate_parser.add_argument("source_markdown", type=Path)
+
+    expanded_write_parser = subparsers.add_parser("write-ai-expanded-markdown")
+    expanded_write_parser.add_argument("expanded_json", type=Path)
+    expanded_write_parser.add_argument("source_markdown", type=Path)
+    expanded_write_parser.add_argument("output_markdown", type=Path)
 
     draft_parser = subparsers.add_parser("draft-chapters")
     draft_parser.add_argument("transcript_json")
@@ -882,6 +925,27 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ActionableValidationError as error:
             print(f"Actionable validation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "prepare-ai-expanded-note":
+        try:
+            prepare_ai_expanded_note_file(args.source_markdown, args.output_json, args.instruction)
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded preparation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "validate-ai-expanded-note":
+        try:
+            print(validate_ai_expanded_note_report(args.expanded_json, args.source_markdown))
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded validation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "write-ai-expanded-markdown":
+        try:
+            write_ai_expanded_markdown_file(args.expanded_json, args.source_markdown, args.output_markdown)
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded write error: {error}", file=sys.stderr)
             return 2
     if args.command == "draft-chapters":
         try:
