@@ -26,6 +26,13 @@ from .config import ConfigError, validate_config
 from .cognitive import prepare_cognitive_chapters
 from .delivery import render_delivery_report, verify_delivery
 from .draft import write_draft_chapters
+from .expanded import (
+    ExpandedValidationError,
+    load_expanded_payload,
+    prepare_expanded_skeleton,
+    validate_expanded_payload,
+    write_expanded_markdown,
+)
 from .evidence import build_evidence_pack
 from .frames import plan_candidate_frame_commands, plan_frame_commands
 from .html import render_html
@@ -118,6 +125,8 @@ def plan_commands(config: dict[str, Any]) -> str:
     cookies = config.get("cookies", {})
     language = config.get("language", {})
     output = config.get("output", {})
+    note = config.get("note", {})
+    note_mode = note.get("mode", "source-faithful")
 
     url = video.get("url") or "<video-url>"
     video_id = video.get("expected_id") or "video"
@@ -206,6 +215,8 @@ def plan_commands(config: dict[str, Any]) -> str:
         "prepare-actionable-note",
         str(paths.root / "evidence" / "evidence_pack.json"),
         str(paths.root / "chapters.actionable.json"),
+        "--note-mode",
+        note_mode,
     ]
     actionable_validate_cmd = [
         ".\\pipeline\\run_pipeline.ps1",
@@ -330,7 +341,7 @@ def plan_commands(config: dict[str, Any]) -> str:
         f"## {next_step_number + 4}. Prepare Actionable Note Skeleton",
         f"`{format_command(actionable_prepare_cmd)}`",
         "",
-        "Use `pipeline/prompts/actionable_note_rewrite.md` to enrich the skeleton with researched, source-labelled teaching content.",
+        "按 source-faithful 重写骨架：只整理视频事实，不添加 AI 扩展。",
         "",
         f"## {next_step_number + 5}. Validate Actionable Note",
         f"`{format_command(actionable_validate_cmd)}`",
@@ -517,9 +528,13 @@ def build_evidence_pack_file(
     output_path.write_text(json.dumps(pack, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def prepare_actionable_note_file(evidence_path: Path, output_path: Path) -> None:
+def prepare_actionable_note_file(
+    evidence_path: Path,
+    output_path: Path,
+    note_mode: str = "source-faithful",
+) -> None:
     evidence = json.loads(evidence_path.read_text(encoding="utf-8-sig"))
-    payload = prepare_actionable_skeleton(evidence)
+    payload = prepare_actionable_skeleton(evidence, note_mode=note_mode)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -535,6 +550,28 @@ def validate_actionable_note_report(path: Path, require_frames: bool = False) ->
             f"- stage_count: {result['stage_count']}",
         ]
     )
+
+
+def prepare_ai_expanded_note_file(source_path: Path, output_path: Path, instruction: str = "") -> None:
+    payload = prepare_expanded_skeleton(source_path, instruction)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def validate_ai_expanded_note_report(draft_path: Path, source_path: Path) -> str:
+    result = validate_expanded_payload(load_expanded_payload(draft_path), source_path)
+    return "\n".join(
+        [
+            "# AI Expanded Note Validation",
+            "",
+            f"- status: {result['status']}",
+            f"- unit_count: {result['unit_count']}",
+        ]
+    )
+
+
+def write_ai_expanded_markdown_file(draft_path: Path, source_path: Path, output_path: Path) -> None:
+    write_expanded_markdown(load_expanded_payload(draft_path), output_path, source_path)
 
 
 def draft_chapters_file(
@@ -675,10 +712,25 @@ def main(argv: list[str] | None = None) -> int:
     actionable_parser = subparsers.add_parser("prepare-actionable-note")
     actionable_parser.add_argument("evidence_json")
     actionable_parser.add_argument("output_json")
+    actionable_parser.add_argument("--note-mode", choices=("source-faithful",), default="source-faithful")
 
     actionable_validate_parser = subparsers.add_parser("validate-actionable-note")
     actionable_validate_parser.add_argument("actionable_json")
     actionable_validate_parser.add_argument("--require-frames", action="store_true")
+
+    expanded_prepare_parser = subparsers.add_parser("prepare-ai-expanded-note")
+    expanded_prepare_parser.add_argument("source_markdown", type=Path)
+    expanded_prepare_parser.add_argument("output_json", type=Path)
+    expanded_prepare_parser.add_argument("--instruction", default="")
+
+    expanded_validate_parser = subparsers.add_parser("validate-ai-expanded-note")
+    expanded_validate_parser.add_argument("expanded_json", type=Path)
+    expanded_validate_parser.add_argument("source_markdown", type=Path)
+
+    expanded_write_parser = subparsers.add_parser("write-ai-expanded-markdown")
+    expanded_write_parser.add_argument("expanded_json", type=Path)
+    expanded_write_parser.add_argument("source_markdown", type=Path)
+    expanded_write_parser.add_argument("output_markdown", type=Path)
 
     draft_parser = subparsers.add_parser("draft-chapters")
     draft_parser.add_argument("transcript_json")
@@ -862,7 +914,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     if args.command == "prepare-actionable-note":
         try:
-            prepare_actionable_note_file(Path(args.evidence_json), Path(args.output_json))
+            prepare_actionable_note_file(Path(args.evidence_json), Path(args.output_json), args.note_mode)
             return 0
         except (OSError, ValueError, json.JSONDecodeError) as error:
             print(f"Actionable preparation error: {error}", file=sys.stderr)
@@ -873,6 +925,27 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ActionableValidationError as error:
             print(f"Actionable validation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "prepare-ai-expanded-note":
+        try:
+            prepare_ai_expanded_note_file(args.source_markdown, args.output_json, args.instruction)
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded preparation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "validate-ai-expanded-note":
+        try:
+            print(validate_ai_expanded_note_report(args.expanded_json, args.source_markdown))
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded validation error: {error}", file=sys.stderr)
+            return 2
+    if args.command == "write-ai-expanded-markdown":
+        try:
+            write_ai_expanded_markdown_file(args.expanded_json, args.source_markdown, args.output_markdown)
+            return 0
+        except ExpandedValidationError as error:
+            print(f"AI expanded write error: {error}", file=sys.stderr)
             return 2
     if args.command == "draft-chapters":
         try:

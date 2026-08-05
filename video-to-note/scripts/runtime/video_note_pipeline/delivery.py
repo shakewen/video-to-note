@@ -16,6 +16,7 @@ def verify_delivery(root: Path, require_frames: bool = True) -> dict[str, Any]:
     _check_file(checks, root, "transcript/transcript.json")
     _check_glob(checks, root, "transcript/*.srt", "transcript/*.srt")
     _check_glob(checks, root, "transcript/*.txt", "transcript/*.txt")
+    _check_file(checks, root, "transcript/full-transcript.md")
     _check_chapters(checks, root, require_frames)
     _check_file(checks, root, "html/index.html")
     _check_html_chapter_content(checks, root, require_frames)

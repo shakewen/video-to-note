@@ -11,6 +11,9 @@ from typing import Any
 from .commands import build_video_downloader_command
 
 
+_AUDIO_SUFFIXES = {".aac", ".m4a", ".mp3", ".opus", ".wav", ".webm"}
+
+
 def _require_file(value: Any, label: str) -> Path:
     path = Path(str(value or "")).expanduser()
     if not path.is_file():
@@ -33,6 +36,42 @@ def _normalized_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _find_split_audio(result: dict[str, Any], video_path: Path) -> Path | None:
+    configured = result.get("audio_path")
+    if configured:
+        return _require_file(configured, "音频文件")
+
+    stem = video_path.stem.rsplit(".f", 1)[0]
+    candidates = sorted(
+        path
+        for path in video_path.parent.iterdir()
+        if path.is_file()
+        and path != video_path
+        and path.suffix.lower() in _AUDIO_SUFFIXES
+        and path.stem.rsplit(".f", 1)[0] == stem
+    )
+    return candidates[0] if candidates else None
+
+
+def _mux_video_and_audio(video_path: Path, audio_path: Path) -> None:
+    ffmpeg = os.environ.get("VIDEO_NOTE_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("检测到独立音轨，但未找到 ffmpeg，无法合并为可转写源视频。")
+
+    merged_path = video_path.with_name(f"{video_path.name}.muxed.mp4")
+    completed = subprocess.run(
+        [ffmpeg, "-y", "-i", str(video_path), "-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", str(merged_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if completed.returncode != 0 or not merged_path.is_file():
+        detail = completed.stderr.strip() or completed.stdout.strip() or "未知 ffmpeg 错误"
+        raise RuntimeError(f"独立音轨合并失败：{detail}")
+    merged_path.replace(video_path)
+
+
 def import_downloader_result(result: dict[str, Any], output_root: Path) -> dict[str, str]:
     """将下载器结果整理为 video-to-note 的稳定目录结构。"""
     video_path = _require_file(result.get("video_path"), "视频文件")
@@ -49,7 +88,13 @@ def import_downloader_result(result: dict[str, Any], output_root: Path) -> dict[
     stable_video_path = media_dir / "source_video"
     if stable_video_path.exists():
         raise FileExistsError(f"目标视频已存在，拒绝覆盖：{stable_video_path}")
+    split_audio_path = _find_split_audio(result, video_path)
     shutil.move(str(video_path), stable_video_path)
+    stable_audio_path = None
+    if split_audio_path:
+        stable_audio_path = media_dir / "source_audio"
+        shutil.move(str(split_audio_path), stable_audio_path)
+        _mux_video_and_audio(stable_video_path, stable_audio_path)
 
     source_metadata_path = metadata_dir / "source_metadata.json"
     shutil.copy2(metadata_path, source_metadata_path)
@@ -71,6 +116,8 @@ def import_downloader_result(result: dict[str, Any], output_root: Path) -> dict[
         "metadata_path": str(normalized_metadata_path),
         "source_metadata_path": str(source_metadata_path),
     }
+    if stable_audio_path:
+        manifest["audio_path"] = str(stable_audio_path)
     (output_root / "source_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",

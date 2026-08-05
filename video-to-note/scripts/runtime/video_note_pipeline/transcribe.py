@@ -39,6 +39,10 @@ def _srt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+def _markdown_timestamp(seconds: float) -> str:
+    return _srt_timestamp(seconds).replace(",", ".")
+
+
 def write_transcript_outputs(
     audio_path: Path,
     output_dir: Path,
@@ -54,6 +58,7 @@ def write_transcript_outputs(
     json_path = output_dir / f"{stem}.json"
     srt_path = output_dir / f"{stem}.srt"
     txt_path = output_dir / f"{stem}.txt"
+    markdown_path = output_dir / "full-transcript.md"
 
     payload = {
         "text": " ".join(item["text"] for item in normalized),
@@ -76,7 +81,22 @@ def write_transcript_outputs(
             f'{item["text"]}\n'
         )
     srt_path.write_text("\n".join(srt_blocks), encoding="utf-8")
-    return {"json": json_path, "srt": srt_path, "txt": txt_path}
+    markdown_blocks = [
+        "# 完整转写",
+        "",
+        "> 原始转写记录：按时间顺序保留每个有效 Whisper 分段；未经 AI 改写。",
+    ]
+    for item in normalized:
+        markdown_blocks.extend(
+            [
+                "",
+                f'## {_markdown_timestamp(item["start"])} → {_markdown_timestamp(item["end"])}',
+                "",
+                item["text"],
+            ]
+        )
+    markdown_path.write_text("\n".join(markdown_blocks) + "\n", encoding="utf-8")
+    return {"json": json_path, "srt": srt_path, "txt": txt_path, "markdown": markdown_path}
 
 
 def transcribe_with_faster_whisper(
@@ -97,8 +117,8 @@ def transcribe_with_faster_whisper(
     model_dir.mkdir(parents=True, exist_ok=True)
     model = WhisperModel(
         model_name,
-        device="auto",
-        compute_type="default",
+        device="cpu",
+        compute_type="int8",
         download_root=str(model_dir),
     )
     segments, info = model.transcribe(

@@ -83,7 +83,7 @@ Cookie 不存在时不传给 yt-dlp。若平台提示登录、验证或访问受
 
 最终按话题、案例、操作目标和结论的语义完整性切章。同一案例的起因、过程和结果必须留在同一章。`adaptive-blocks-v1` 不设 12 章硬上限；超过 40 章时停止并检查是否把同一语义片段切得过碎。
 
-只在此时读取 `learning-design.md` 与 `rewrite-contract.md`。一次读取证据包和骨架并写回 `chapters.actionable.json`，不要重复加载完整字幕。新任务必须提供一句 `author_statement`、`plain_rewrite` 和内部逐字 `source_quotes`。`ai_advice_enabled` 默认开启；用户关闭时省略 `ai_advice`。根据章节语义只选择需要的 `content_blocks`；没有明确迁移步骤时省略 `application`。写回前逐章检查标题、作者表达、内容块、截图和时间戳是否指向同一内容。
+只在此时读取 `learning-design.md` 与 `rewrite-contract.md`。一次读取证据包和骨架并写回 `chapters.actionable.json`，不要重复加载完整字幕。新任务必须提供一句 `author_statement`、`plain_rewrite` 和内部逐字 `source_quotes`。`source-faithful` 中 `ai_advice_enabled` 必须为 `false`；AI 重塑只能在独立的 `ai-expanded` 阶段执行。根据章节语义只选择需要的 `content_blocks`；没有明确迁移步骤时省略 `application`。写回前逐章检查标题、作者表达、内容块、截图和时间戳是否指向同一内容。
 
 ## 5. 截图、渲染与验收
 
@@ -102,3 +102,13 @@ verify-delivery
 检查桌面和 390px 手机宽度：缺图为 0、横向溢出为 0、控制台错误为 0；远程样式、脚本和字体请求为 0；答题框、提交答案、评分和学习记录模块为 0。
 
 长视频还要检查章节目录、当前章节提示、阅读进度和证据图延迟加载。最终向用户返回可整体搬运的离线目录，以及其中 `html/index.html`、`chapters.actionable.json` 和 `render-check` 的绝对路径。
+
+## 6. AI 重塑（用户明确要求时）
+
+只在 source-faithful 已验收后运行。它不属于 `note.mode`，不调用下载、Whisper、抽帧或 HTML 渲染。
+
+1. 运行 `prepare-ai-expanded-note <source-faithful.md> <expanded.json> --instruction "<用户自然语言说明>"`，记录冻结源的 SHA-256。
+2. 完整读取 `ai-expanded-contract.md`，只读取一次完整 source-faithful，形成精简的学习结构与待核查主张。每项主张只保留主题、原子结论和核查原因；不要先写读者 Markdown。
+3. 用户未要求“不要联网”时，用 `Agent Reach` 只检索去重后的待核查主张。自动核查仅覆盖明显可疑、有风险、时效性强或用户点名的事实；不检索作者审美、工作流偏好或视频已演示的操作。结果只保留结论和内部来源审计。
+4. 使用学习结构与核查结论填充 `expanded.json`，不再次读取完整 source-faithful。运行 `validate-ai-expanded-note`；源文件变化、重复单元、无来源的已核查结论或不支持的时间戳字段均停止。
+5. 运行 `write-ai-expanded-markdown`，只交付独立的 `ai-expanded.md`。不输出 HTML、时间戳、来源链接、核查审计或“原视频/AI”对照。

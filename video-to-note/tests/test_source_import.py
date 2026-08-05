@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,11 +11,107 @@ RUNTIME_ROOT = Path(__file__).resolve().parents[1] / "scripts" / "runtime"
 sys.path.insert(0, str(RUNTIME_ROOT))
 
 from video_note_pipeline.source_import import import_downloader_result
+from video_note_pipeline.actionable import ActionableValidationError, prepare_actionable_skeleton
 from video_note_pipeline.commands import build_video_downloader_command, build_whisper_command
 from video_note_pipeline.cli import plan_commands
+from video_note_pipeline.config import ConfigError, validate_config
+from video_note_pipeline.transcribe import transcribe_with_faster_whisper, write_transcript_outputs
 
 
 class SourceImportTests(unittest.TestCase):
+    def test_source_faithful_mode_disables_ai_advice(self) -> None:
+        payload = prepare_actionable_skeleton(self._evidence_pack(), note_mode="source-faithful")
+
+        self.assertEqual(payload["note_mode"], "source-faithful")
+        self.assertFalse(payload["ai_advice_enabled"])
+
+    def test_ai_expanded_mode_remains_outside_the_main_pipeline(self) -> None:
+        with self.assertRaises(ActionableValidationError):
+            prepare_actionable_skeleton(self._evidence_pack(), note_mode="ai-expanded")
+
+        with self.assertRaises(ConfigError):
+            validate_config(self._config_with_mode("ai-expanded"))
+
+    def test_unknown_note_mode_is_rejected(self) -> None:
+        with self.assertRaises(ActionableValidationError):
+            prepare_actionable_skeleton(self._evidence_pack(), note_mode="unsupported")
+
+        with self.assertRaises(ConfigError):
+            validate_config(self._config_with_mode("unsupported"))
+
+    def test_plan_passes_note_mode_to_actionable_preparation(self) -> None:
+        plan = plan_commands(self._config_with_mode("source-faithful"))
+
+        self.assertIn("--note-mode source-faithful", plan)
+
+    @staticmethod
+    def _evidence_pack() -> dict[str, object]:
+        return {
+            "topology_candidate": {"type": "fragmented_knowledge", "reason": "测试"},
+            "chapters": [
+                {
+                    "chapter_index": 1,
+                    "title": "测试章节",
+                    "time_range": "00:00-00:01",
+                    "template_type": "concept",
+                    "body": ["测试内容"],
+                    "visual_anchor": "00:00 测试画面",
+                }
+            ],
+        }
+
+    @staticmethod
+    def _config_with_mode(mode: str) -> dict[str, object]:
+        return {
+            "video": {"url": "https://example.invalid/video", "expected_id": "demo"},
+            "cookies": {"mode": "none"},
+            "language": {"primary": "zh"},
+            "frames": {"video_type": "lecture"},
+            "note": {"mode": mode},
+            "output": {"root_dir": "C:/output"},
+        }
+
+    def test_transcript_outputs_include_complete_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outputs = write_transcript_outputs(
+                root / "audio.mp3",
+                root / "transcript",
+                "zh",
+                [
+                    {"start": 1.2, "end": 3.4, "text": "第一段操作说明"},
+                    {"start": 5.0, "end": 6.0, "text": "第二段教学说明"},
+                ],
+            )
+
+            markdown = outputs["markdown"].read_text(encoding="utf-8")
+
+            self.assertIn("# 完整转写", markdown)
+            self.assertIn("未经 AI 改写", markdown)
+            self.assertIn("## 00:00:01.200 → 00:00:03.400", markdown)
+            self.assertIn("## 00:00:05.000 → 00:00:06.000", markdown)
+            self.assertLess(markdown.index("第一段操作说明"), markdown.index("第二段教学说明"))
+
+    def test_faster_whisper_uses_cpu_int8_by_default(self) -> None:
+        class FakeWhisperModel:
+            kwargs = None
+
+            def __init__(self, *args, **kwargs) -> None:
+                FakeWhisperModel.kwargs = kwargs
+
+            def transcribe(self, *args, **kwargs):
+                return ([{"start": 0, "end": 1, "text": "测试"}], types.SimpleNamespace(language="zh"))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio_path = root / "audio.mp3"
+            audio_path.write_bytes(b"audio")
+            with patch.dict(sys.modules, {"faster_whisper": types.SimpleNamespace(WhisperModel=FakeWhisperModel)}):
+                transcribe_with_faster_whisper(audio_path, root / "transcript", "turbo", "zh", root / "models")
+
+        self.assertEqual(FakeWhisperModel.kwargs["device"], "cpu")
+        self.assertEqual(FakeWhisperModel.kwargs["compute_type"], "int8")
+
     def test_whisper_defaults_to_faster_whisper_adapter(self) -> None:
         with patch.dict("os.environ", {"VIDEO_NOTE_TRANSCRIBE_BACKEND": ""}):
             command = build_whisper_command("C:/output/audio.mp3", "zh", "C:/output/transcript")
@@ -30,6 +127,24 @@ class SourceImportTests(unittest.TestCase):
         self.assertIn("video-downloader", skill)
         self.assertIn("--asr none", skill)
         self.assertNotIn("平台字幕", skill)
+
+    def test_skill_documents_source_faithful_boundary(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        contract = (root / "references" / "rewrite-contract.md").read_text(encoding="utf-8")
+
+        self.assertIn("source-faithful", skill)
+        self.assertIn("不扩展、不纠错、不补充", skill)
+        self.assertIn("ai-expanded", skill)
+        self.assertIn("独立阶段", skill)
+        self.assertIn("source-faithful", contract)
+        self.assertNotIn("ai-expanded", contract)
+        expanded_contract = (root / "references" / "ai-expanded-contract.md").read_text(encoding="utf-8")
+        self.assertIn("冻结", expanded_contract)
+        self.assertIn("不输出时间戳", expanded_contract)
+        self.assertIn("待核查主张", expanded_contract)
+        self.assertIn("不再次读取完整", expanded_contract)
+        self.assertIn("Agent Reach", expanded_contract)
 
     def test_plan_uses_downloader_then_single_whisper_transcript(self) -> None:
         plan = plan_commands(
@@ -109,6 +224,34 @@ class SourceImportTests(unittest.TestCase):
             self.assertEqual(metadata["duration"], 12.5)
             self.assertEqual(metadata["uploader"], "作者")
             self.assertTrue((root / "output" / "metadata" / "post_caption.txt").is_file())
+
+    def test_import_downloader_result_preserves_and_muxes_split_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "downloader"
+            source_dir.mkdir()
+            video_path = source_dir / "lesson.f30064.mp4"
+            video_path.write_bytes(b"video")
+            audio_path = source_dir / "lesson.f30280.m4a"
+            audio_path.write_bytes(b"audio")
+            metadata_path = source_dir / "metadata.json"
+            metadata_path.write_text("{}", encoding="utf-8")
+
+            with patch("video_note_pipeline.source_import._mux_video_and_audio") as mux:
+                manifest = import_downloader_result(
+                    {
+                        "platform": "bilibili",
+                        "id": "BV-test",
+                        "video_path": str(video_path),
+                        "metadata_path": str(metadata_path),
+                    },
+                    root / "output",
+                )
+
+            stable_audio = root / "output" / "media" / "source_audio"
+            self.assertEqual(manifest["audio_path"], str(stable_audio))
+            self.assertTrue(stable_audio.is_file())
+            mux.assert_called_once_with(root / "output" / "media" / "source_video", stable_audio)
 
 
 if __name__ == "__main__":

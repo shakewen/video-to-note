@@ -63,13 +63,17 @@ _AI_ADVICE_VERDICTS = {
     "incorrect",
     "insufficient_evidence",
 }
+NOTE_MODES = {"source-faithful"}
 
 
 class ActionableValidationError(ValueError):
     pass
 
 
-def prepare_actionable_skeleton(evidence_pack: dict[str, Any]) -> dict[str, Any]:
+def prepare_actionable_skeleton(
+    evidence_pack: dict[str, Any],
+    note_mode: str = "source-faithful",
+) -> dict[str, Any]:
     """Create an evidence-only schema v3 draft for the AI enrichment stage."""
     if not isinstance(evidence_pack, dict):
         raise ActionableValidationError("evidence pack 顶层必须是对象")
@@ -79,12 +83,15 @@ def prepare_actionable_skeleton(evidence_pack: dict[str, Any]) -> dict[str, Any]
         raise ActionableValidationError("evidence pack chapters 必须是非空列表")
     if not isinstance(topology, dict):
         raise ActionableValidationError("evidence pack topology_candidate 必须是对象")
+    if note_mode not in NOTE_MODES:
+        raise ActionableValidationError(f"note_mode 仅支持 {sorted(NOTE_MODES)}")
 
     prepared = [_actionable_chapter_skeleton(item, index) for index, item in enumerate(chapters, 1)]
     return {
         "schema_version": 3,
         "learning_design_version": LEARNING_DESIGN_VERSION,
-        "ai_advice_enabled": True,
+        "note_mode": "source-faithful",
+        "ai_advice_enabled": False,
         "content_topology": dict(topology),
         "learning_path": [],
         "chapters": prepared,
@@ -213,6 +220,12 @@ def validate_actionable_payload(
     ai_advice_enabled = payload.get("ai_advice_enabled")
     if ai_advice_enabled is not None and type(ai_advice_enabled) is not bool:
         raise ActionableValidationError("ai_advice_enabled 必须为布尔值")
+    note_mode = payload.get("note_mode")
+    if note_mode is not None:
+        if note_mode not in NOTE_MODES:
+            raise ActionableValidationError(f"note_mode 仅支持 {sorted(NOTE_MODES)}")
+        if note_mode == "source-faithful" and ai_advice_enabled:
+            raise ActionableValidationError("source-faithful 模式必须关闭 AI 建议")
 
     learning_path = _require_list(payload, "learning_path", "顶层")
     chapters = _require_list(payload, "chapters", "顶层")
@@ -312,6 +325,7 @@ def validate_actionable_payload(
         "stage_count": len(learning_path),
         "learning_design_version": learning_design_version,
         "ai_advice_enabled": ai_advice_enabled,
+        "note_mode": note_mode,
     }
 
 

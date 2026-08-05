@@ -2,18 +2,28 @@
 
 把 `evidence_pack.json` 与 schema v3 骨架重写为可离线渲染的笔记 JSON。只输出 JSON。
 
+## 模式边界
+
+### `source-faithful`
+
+- 默认模式，`ai_advice_enabled` 必须为 `false`。
+- 只收录视频实际解释、推导、演示或操作过的内容；允许整理语言，但不得新增事实、纠错或延伸教学。
+- 仅被顺带提及，或作者明确说本课不展开的内容可以忽略。
+- 一次结构化整理同时产出最终内容和内部覆盖映射；截图只用于核对未说出的界面操作，不逐帧交给模型。
+
 ## 新任务版本
 
 ```json
 {
   "schema_version": 3,
   "learning_design_version": "adaptive-blocks-v1",
-  "ai_advice_enabled": true
+  "note_mode": "source-faithful",
+  "ai_advice_enabled": false
 }
 ```
 
 旧数据没有 `learning_design_version` 时继续使用旧渲染器；已有 `b-c-v1` 仍兼容。
-新任务的 `ai_advice_enabled` 默认开启，用户可以关闭。
+`source-faithful` 始终关闭 `ai_advice_enabled`。
 
 ## 总原则
 
